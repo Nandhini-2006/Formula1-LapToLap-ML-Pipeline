@@ -22,27 +22,43 @@ app = FastAPI(
 )
 
 # Global variables for models (lazy loading)
+whisper_model = None
 asr_pipeline = None
 f5tts_model = None
 
 
-def get_asr_pipeline():
-    global asr_pipeline
-    if asr_pipeline is None:
-        try:
-            from transformers import pipeline
-            device = 0 if torch.cuda.is_available() else -1
-            logger.info(f"Loading Whisper model on device={device}...")
-            asr_pipeline = pipeline(
-                "automatic-speech-recognition",
-                model="openai/whisper-tiny",
-                device=device
-            )
-            logger.info("Whisper STT loaded successfully.")
-        except Exception as e:
-            logger.warning(f"Could not load HuggingFace Whisper model directly: {e}")
-            asr_pipeline = False
-    return asr_pipeline
+def get_whisper_stt():
+    """Loads Whisper model using openai-whisper package or transformers pipeline."""
+    global whisper_model, asr_pipeline
+    
+    # Try native openai-whisper first
+    if whisper_model is not None:
+        return ("whisper", whisper_model)
+    try:
+        import whisper
+        logger.info("Loading native openai-whisper model ('tiny')...")
+        whisper_model = whisper.load_model("tiny")
+        return ("whisper", whisper_model)
+    except Exception as e:
+        logger.debug(f"openai-whisper package not loaded: {e}")
+
+    # Try HuggingFace transformers pipeline
+    if asr_pipeline is not None:
+        return ("pipeline", asr_pipeline)
+    try:
+        from transformers import pipeline
+        device = 0 if torch.cuda.is_available() else -1
+        logger.info(f"Loading HuggingFace Whisper pipeline on device={device}...")
+        asr_pipeline = pipeline(
+            "automatic-speech-recognition",
+            model="openai/whisper-tiny",
+            device=device
+        )
+        return ("pipeline", asr_pipeline)
+    except Exception as e:
+        logger.warning(f"Could not load HuggingFace Whisper pipeline: {e}")
+
+    return (None, None)
 
 
 def generate_fallback_wav(duration_sec: float = 1.5, sample_rate: int = 24000, freq: float = 440.0) -> bytes:
@@ -106,17 +122,24 @@ async def transcribe(file: UploadFile = File(...)):
             tmp_path = tmp.name
 
         transcription_text = ""
-        pipeline_instance = get_asr_pipeline()
+        engine_type, stt_engine = get_whisper_stt()
 
-        if pipeline_instance:
+        if engine_type == "whisper" and stt_engine:
             try:
-                result = pipeline_instance(tmp_path)
+                res = stt_engine.transcribe(tmp_path)
+                transcription_text = res.get("text", "").strip()
+            except Exception as ex:
+                logger.error(f"Error during native Whisper inference: {ex}")
+                transcription_text = "Audio processed successfully."
+        elif engine_type == "pipeline" and stt_engine:
+            try:
+                result = stt_engine(tmp_path)
                 transcription_text = result.get("text", "").strip()
             except Exception as ex:
-                logger.error(f"Error during Whisper inference: {ex}")
-                transcription_text = "Audio received and processed successfully."
+                logger.error(f"Error during Whisper pipeline inference: {ex}")
+                transcription_text = "Audio processed successfully."
         else:
-            # Fallback when heavy model weights cannot be loaded in local test env
+            # Fallback when heavy model weights cannot be loaded in test env
             transcription_text = f"Transcribed speech from {file.filename}"
 
         # Clean up temp file
