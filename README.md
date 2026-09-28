@@ -1,7 +1,7 @@
 
 <div align="center">
 
-# 🏁 FORMULA 1 RACE OUTCOME PREDICTOR
+# FORMULA 1 RACE OUTCOME PREDICTOR
 
 ### Machine Learning Pipeline for Predicting Formula 1 Race Finishing Positions
 
